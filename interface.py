@@ -1,5 +1,6 @@
 import logging
 import re
+import json
 
 from datetime import datetime
 
@@ -148,41 +149,100 @@ class ModuleInterface:
         return cover_url.format(w=size, h=size)
 
     def search(self, query_type: DownloadTypeEnum, query: str, track_info: TrackInfo = None, limit: int = 20):
-        results = self.session.get_search(query)
-
-        name_parse = {
-            "track": "tracks",
-            "album": "releases",
-            "playlist": "charts",
-            "artist": "artists"
+        # Map DownloadTypeEnum to the string expected by the API for search_type
+        search_type_map = {
+            DownloadTypeEnum.track: "tracks",
+            DownloadTypeEnum.album: "releases",
+            DownloadTypeEnum.playlist: "charts", # Or 'playlists' depending on API, check API response if needed
+            DownloadTypeEnum.artist: "artists"
         }
+        search_type_str = search_type_map.get(query_type)
+
+        if not search_type_str:
+            self.print(f"Warning: Search type '{query_type.name}' not directly supported for Beatport typed search. Performing general search.", log_level=LogLevel.warning)
+            # Fallback to general search if type is not supported for typed search
+            results_data = self.session.get_search(query=query) 
+            # Use the old parsing logic for general search
+            name_parse = {
+                "track": "tracks",
+                "album": "releases",
+                "playlist": "charts", # Use 'charts' for playlists in general search
+                "artist": "artists"
+            }
+            result_list = results_data.get(name_parse.get(query_type.name), []) # Default to empty list
+
+        else:
+            self.print(f"Performing typed search for '{search_type_str}'...")
+            # Use the new search type and per_page limit
+            results_data = self.session.get_search(query=query, search_type=search_type_str, per_page=limit)
+            # --- Remove logging ---
+            #self.print(f"Raw API response for typed search ({search_type_str}):")
+            #try:
+            #    self.print(json.dumps(results_data, indent=4))
+            #except Exception as log_e:
+            #     self.print(f"Could not dump results_data as JSON: {log_e}")
+            #     self.print(str(results_data)) # Print raw string if JSON fails
+            # -------------------
+            # Get results from the key matching the search type (e.g., 'tracks', 'releases')
+            result_list = results_data.get(search_type_str, []) # Use the type string as the key
+            #self.print(f"Parsed result_list (from key '{search_type_str}') length: {len(result_list)}")
+
+            # TODO: Implement pagination handling here if needed
+            # Check results_data.get('next') and loop with increasing page number if required
 
         items = []
-        for i in results.get(name_parse.get(query_type.name)):
+        # Process the results (either from the typed search 'results' or the general search specific key)
+        for i in result_list:
             additional = []
             duration = None
-            if query_type is DownloadTypeEnum.playlist:
-                artists = [i.get("person").get("owner_name") if i.get("person") else "Beatport"]
-                year = i.get("change_date")[:4] if i.get("change_date") else None
-            elif query_type is DownloadTypeEnum.track:
-                artists = [a.get("name") for a in i.get("artists")]
-                year = i.get("publish_date")[:4] if i.get("publish_date") else None
+            artists = None
+            year = None
 
-                duration = i.get("length_ms") // 1000
-                additional.append(f"{i.get('bpm')}BPM")
-            elif query_type is DownloadTypeEnum.album:
-                artists = [j.get("name") for j in i.get("artists")]
-                year = i.get("publish_date")[:4] if i.get("publish_date") else None
-            elif query_type is DownloadTypeEnum.artist:
-                artists = None
+            # Parsing logic needs slight adjustment based on type, as structure within results might vary slightly
+            # Example adjustments:
+            if search_type_str == "tracks" or (not search_type_str and query_type is DownloadTypeEnum.track):
+                artists = [a.get("name") for a in i.get("artists", [])]
+                year = i.get("publish_date", "")[:4] if i.get("publish_date") else None
+                duration = i.get("length_ms") // 1000 if i.get("length_ms") else None
+                additional.append(f"{i.get('bpm')}BPM") if i.get('bpm') else None
+                name = i.get("name", "")
+                name += f" ({i.get('mix_name')})" if i.get('mix_name') else ""
+
+            elif search_type_str == "releases" or (not search_type_str and query_type is DownloadTypeEnum.album):
+                artists = [a.get("name") for a in i.get("artists", [])]
+                year = i.get("publish_date", "")[:4] if i.get("publish_date") else None
+                name = i.get("name", "")
+
+            elif search_type_str == "charts" or (not search_type_str and query_type is DownloadTypeEnum.playlist):
+                 # 'charts' type has a different structure in the multi-category response vs typed response
+                 # General search parsing:
+                if not search_type_str:
+                    artists = [i.get("person").get("owner_name") if i.get("person") else "Beatport"]
+                    year = i.get("change_date", "")[:4] if i.get("change_date") else None
+                else: # Typed search 'charts' parsing (assuming similar structure to playlists)
+                    # Need to confirm structure from API response when searching type=charts
+                    # Placeholder:
+                    artists = [i.get("artist", {}).get("name")] if i.get("artist") else ["Unknown Chart Creator"]
+                    year = i.get("publish_date", "")[:4] if i.get("publish_date") else None # Check actual key
+                name = i.get("name", "")
+
+            elif search_type_str == "artists" or (not search_type_str and query_type is DownloadTypeEnum.artist):
+                artists = None # Artist search results don't list artists themselves
                 year = None
-            else:
-                raise self.exception(f"Query type '{query_type.name}' is not supported!")
+                name = i.get("name", "")
 
-            name = i.get("name")
-            name += f" ({i.get('mix_name')})" if i.get("mix_name") else ""
+            else: # Handle cases where parsing might fail or type is unexpected
+                # This case might be hit if the fallback general search is used for an unsupported query_type
+                if not search_type_str:
+                     self.print(f"Warning: Could not parse general search item for query type '{query_type.name}': {i}", log_level=LogLevel.warning)
+                else:
+                     self.print(f"Warning: Could not parse typed search item for search type '{search_type_str}': {i}", log_level=LogLevel.warning)
+                continue # Skip this item
 
             additional.append(f"Exclusive") if i.get("exclusive") is True else None
+
+            # Ensure name is not None before creating SearchResult
+            if name is None: name = "Unknown"
 
             item = SearchResult(
                 name=name,
@@ -190,10 +250,11 @@ class ModuleInterface:
                 year=year,
                 duration=duration,
                 result_id=i.get("id"),
-                additional=additional if additional != [] else None,
-                extra_kwargs={"data": {i.get("id"): i}}
+                additional=[a for a in additional if a], # Filter out None values
+                # Pass the raw item data for potential use later (e.g., get_album_info)
+                # We store it under the ID for easy lookup
+                extra_kwargs={"data": {i.get("id"): i}} if i.get("id") else {} 
             )
-
             items.append(item)
 
         return items
