@@ -187,27 +187,14 @@ class BeatportApi:
     def get_label_releases(self, label_id: str):
         return self._get(f'catalog/labels/{label_id}/releases')
 
-    def get_search(self, query: str, search_type: str = None, page: int = 1, per_page: int = 100):
-        """Performs a search query.
-
-        Args:
-            query: The search term.
-            search_type: Optional. Filter results by type (e.g., 'tracks', 'artists', 'releases', 'labels', 'charts').
-                         If provided, pagination (page, per_page) is likely supported.
-                         If None, returns a general overview across types (pagination not supported).
-            page: The page number to retrieve (used only if search_type is provided).
-            per_page: The number of results per page (used only if search_type is provided).
-
-        Returns:
-            A dictionary containing the search results.
-        """
+    def get_search(self, query: str, search_type: str = None, page: int = 1, per_page: int = 100):        
         params = {'q': query}
         if search_type:
             params['type'] = search_type
-            # Only add pagination params if a type filter is active
+            # only add pagination params if a type filter is active
             params['page'] = page
             params['per_page'] = per_page
-        # Else (no search_type), the API returns a multi-category summary without pagination
+        # else (no search_type), the API returns a multi-category summary without pagination
         return self._get('catalog/search', params=params)
 
     def get_track_stream(self, track_id: str):
