@@ -112,8 +112,9 @@ class ModuleInterface:
 
     @staticmethod
     def custom_url_parse(link: str):
-        match = re.search(r"https?://(www.)?beatport.com/(?:[a-z]{2}/)?.*?"
-                          r"(?P<type>track|release|artist|playlists|chart)/.*?/?(?P<id>\d+)", link)
+        # Previous regex (caused issues): r"https?://(www.)?beatport.com/(?:[a-z]{2}/)?.*?/(?P<type>track|release|artist|playlists|chart)/.*/?(?P<id>\d+)"
+        # New, more explicit regex:
+        match = re.search(r"https?://(www\.)?beatport\.com/(?:[a-z]{2}/)?(?P<type>track|release|artist|playlists|chart)/(?P<slug>.+)/(?P<id>\d+)", link)
 
         # so parse the regex "match" to the actual DownloadTypeEnum
         media_types = {
@@ -123,6 +124,9 @@ class ModuleInterface:
             "playlists": DownloadTypeEnum.playlist,
             "chart": DownloadTypeEnum.playlist
         }
+
+        if not match: # Added error handling for robustness
+            raise ValueError(f"Could not parse Beatport URL: {link}")
 
         return MediaIdentification(
             media_type=media_types[match.group("type")],
