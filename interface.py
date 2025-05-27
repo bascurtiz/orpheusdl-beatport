@@ -332,7 +332,7 @@ class ModuleInterface:
             name=album_data.get("name"),
             release_year=album_data.get("publish_date")[:4] if album_data.get("publish_date") else None,
             # sum up all the individual track lengths
-            duration=sum([t.get("length_ms") // 1000 for t in tracks]),
+            duration=sum([(t.get("length_ms") or 0) // 1000 for t in tracks]),
             upc=album_data.get("upc"),
             cover_url=self._generate_artwork_url(album_data.get("image").get("dynamic_uri"), self.cover_size),
             artist=album_data.get("artists")[0].get("name"),
