@@ -179,109 +179,187 @@ class ModuleInterface:
         
         items = []
         for i in result_list:
-            additional = []
+            # Initialize fields for SearchResult
+            name = i.get('name', '')
+            artists = []
+            year = None
             duration = None
-            
+            additional = []
+            item_extra_kwargs = {}
+            image_uri = i.get('image', {}).get('uri')
+            image_url = self._generate_artwork_url(image_uri, 500) if image_uri else None
+            result_id = str(i.get('id'))
+            is_explicit = i.get('explicit', False)
+
             if query_type is DownloadTypeEnum.playlist:
-                if search_type:
-                    artists = [i.get("artist", {}).get("name")] if i.get("artist") else ["Beatport"]
-                    year = i.get("publish_date")[:4] if i.get("publish_date") else None
+                item_extra_kwargs['is_chart'] = True # Beatport search for playlists returns charts
+                # Artist parsing for charts
+                if i.get('artist') and i['artist'].get('name'):
+                    artists = [i['artist']['name']]
+                elif i.get('person') and i['person'].get('owner_name'): # Fallback for different structures
+                    artists = [i['person']['owner_name']]
                 else:
-                    artists = [i.get("person").get("owner_name") if i.get("person") else "Beatport"]
-                    year = i.get("change_date")[:4] if i.get("change_date") else None
-                    
+                    artists = ["Beatport"] # Default
+                # Year parsing for charts
+                if i.get("publish_date"):
+                    year = i.get("publish_date")[:4]
+                elif i.get("change_date"): # Fallback date field
+                    year = i.get("change_date")[:4]
+
             elif query_type is DownloadTypeEnum.track:
                 artists = [a.get("name") for a in i.get("artists", [])]
-                year = i.get("publish_date")[:4] if i.get("publish_date") else None
-                duration = i.get("length_ms") // 1000 if i.get("length_ms") else None
+                if i.get("publish_date"):
+                    year = i.get("publish_date")[:4]
+                if i.get("length_ms"):
+                    duration = i.get("length_ms") // 1000
                 if i.get("bpm"):
                     additional.append(f"{i.get('bpm')}BPM")
-                    
+                if i.get("mix_name") and name: # Add mix name to track name
+                    name += f" ({i.get('mix_name')})"
+
             elif query_type is DownloadTypeEnum.album:
                 artists = [a.get("name") for a in i.get("artists", [])]
-                year = i.get("publish_date")[:4] if i.get("publish_date") else None
-                
+                if i.get("publish_date"):
+                    year = i.get("publish_date")[:4]
+                if i.get("catalog_number"):
+                    additional.append(f"Cat: {i.get('catalog_number')}")
+            
             elif query_type is DownloadTypeEnum.artist:
-                artists = None
-                year = None
-                
-            else:
-                continue
-            
-            name = i.get("name", "")
-            if query_type is DownloadTypeEnum.track and i.get("mix_name"):
-                name += f" ({i.get('mix_name')})"
-                
+                if i.get("name"):
+                    artists = [i.get("name")]
+                # Year is usually not applicable for artist search results directly
+                if i.get("genres"):
+                    genre_names = [g.get("name") for g in i.get("genres", []) if g.get("name")]
+                    if genre_names:
+                        additional.append(", ".join(genre_names))
+
             if i.get("exclusive") is True:
-                additional.append("Exclusive")
-                
-            item = SearchResult(
+                 additional.append("Exclusive")
+
+            items.append(SearchResult(
                 name=name,
-                artists=artists,
+                artists=artists if artists else ["Unknown Artist"], # Ensure artists list is not empty
+                result_id=result_id,
                 year=year,
-                duration=duration,
-                result_id=i.get("id"),
                 additional=additional if additional else None,
-                extra_kwargs={"data": {i.get("id"): i}} if i.get("id") else {}
-            )
-            
-            items.append(item)
-            
+                duration=duration,
+                explicit=is_explicit,
+                image_url=image_url,
+                extra_kwargs=item_extra_kwargs if item_extra_kwargs else {}
+            ))
         return items
         
     def get_playlist_info(self, playlist_id: str, is_chart: bool = False) -> PlaylistInfo:
-        # get the DJ chart or user playlist
+        all_tracks_raw = []
+        current_page = 1
+        per_page = 100 # Max items per page Beatport API usually allows for tracks
+
         if is_chart:
             playlist_data = self.session.get_chart(playlist_id)
-            playlist_tracks_data = self.session.get_chart_tracks(playlist_id)
+            # Initial fetch for chart tracks
+            tracks_page_data = self.session.get_chart_tracks(playlist_id, page=current_page, per_page=per_page)
         else:
             playlist_data = self.session.get_playlist(playlist_id)
-            playlist_tracks_data = self.session.get_playlist_tracks(playlist_id)
+            # Initial fetch for playlist tracks
+            tracks_page_data = self.session.get_playlist_tracks(playlist_id, page=current_page, per_page=per_page)
 
-        cache = {"data": {}}
-
-        # now fetch all the found total_items
-        if is_chart:
-            playlist_tracks = playlist_tracks_data.get("results")
-        else:
-            playlist_tracks = [t.get("track") for t in playlist_tracks_data.get("results")]
-
-        total_tracks = playlist_tracks_data.get("count")
-        for page in range(2, (total_tracks - 1) // 100 + 2):
-            print(f"Fetching {len(playlist_tracks)}/{total_tracks}", end="\r")
-            # get the DJ chart or user playlist
+        if tracks_page_data and 'results' in tracks_page_data:
+            all_tracks_raw.extend(tracks_page_data['results'])
+        
+        total_items = tracks_page_data.get('count', 0) if tracks_page_data else 0
+        
+        # Paginate if necessary
+        while len(all_tracks_raw) < total_items and total_items > 0:
+            current_page += 1
+            self.print(f"Fetching playlist/chart tracks page {current_page} ({len(all_tracks_raw)}/{total_items})")
             if is_chart:
-                playlist_tracks += self.session.get_chart_tracks(playlist_id, page=page).get("results")
+                tracks_page_data = self.session.get_chart_tracks(playlist_id, page=current_page, per_page=per_page)
             else:
-                # unfold the track element
-                playlist_tracks += [t.get("track")
-                                    for t in self.session.get_playlist_tracks(playlist_id, page=page).get("results")]
+                tracks_page_data = self.session.get_playlist_tracks(playlist_id, page=current_page, per_page=per_page)
+            
+            if tracks_page_data and 'results' in tracks_page_data and tracks_page_data['results']:
+                all_tracks_raw.extend(tracks_page_data['results'])
+            else:
+                # No more results or error, break loop
+                logging.warning(f"Stopped pagination for {'chart' if is_chart else 'playlist'} {playlist_id} at page {current_page}. Expected {total_items}, got {len(all_tracks_raw)}.")
+                break
+        if total_items > 0: self.print("") # Clear the progress line by printing a newline
 
-        for i, track in enumerate(playlist_tracks):
-            # add the track numbers
-            track["track_number"] = i + 1
-            track["total_tracks"] = total_tracks
-            # add the modified track to the track_extra_kwargs
-            cache["data"][track.get("id")] = track
+        # For playlists (non-charts), tracks are often nested under a 'track' key.
+        # For charts, the track data is usually direct.
+        if not is_chart:
+             processed_tracks_ids = [str(track_item['track']['id']) for track_item in all_tracks_raw if 'track' in track_item and 'id' in track_item['track']]
+        else: # For charts
+             processed_tracks_ids = [str(track_item['id']) for track_item in all_tracks_raw if 'id' in track_item]
 
-        creator = "User"
+
+        # Common fields for both charts and playlists
+        name = playlist_data.get('name', 'Unknown Playlist')
+        description = playlist_data.get('description', '')
+        
+        # Fields might differ between chart and playlist
         if is_chart:
-            creator = playlist_data.get("person").get("owner_name") if playlist_data.get("person") else "Beatport"
-            release_year = playlist_data.get("change_date")[:4] if playlist_data.get("change_date") else None
-            cover_url = playlist_data.get("image").get("dynamic_uri")
-        else:
-            release_year = playlist_data.get("updated_date")[:4] if playlist_data.get("updated_date") else None
-            # always get the first image of the four total images, why is there no dynamic_uri available? Annoying
-            cover_url = playlist_data.get("release_images")[0]
+            creator_name = playlist_data.get('curator_name')
+            if not creator_name and playlist_data.get('artist'): # Charts might have an 'artist' as curator
+                 creator_name = playlist_data.get('artist', {}).get('name', 'Beatport')
+            elif not creator_name: # Fallback if no curator or artist name
+                 creator_name = "Beatport"
+            
+            creator_id = str(playlist_data.get('artist', {}).get('id')) if playlist_data.get('artist') else None
+            release_date_str = playlist_data.get('publish_date') # Charts use 'publish_date'
+            image_data = playlist_data.get('image')
+            num_tracks_from_api = playlist_data.get('track_count', len(processed_tracks_ids)) # Charts often have 'track_count'
+            is_explicit = playlist_data.get('explicit', False)
+
+        else: # For actual playlists (if distinct endpoint/structure exists and is used)
+              # This part is more speculative as primary focus is charts based on search.
+              # If Beatport API has distinct user playlists, structure might be like this:
+            creator_name = playlist_data.get('user', {}).get('username', 'Unknown Creator') 
+            creator_id = str(playlist_data.get('user', {}).get('id')) if playlist_data.get('user') else None
+            release_date_str = playlist_data.get('created_at') # Or 'updated_at' for playlists
+            image_data = playlist_data.get('image') # Structure might vary
+            num_tracks_from_api = playlist_data.get('tracks_count', len(processed_tracks_ids)) # Or 'count'
+            is_explicit = False # Playlists might not have a global explicit flag like albums/tracks.
+
+        release_year = None
+        if release_date_str:
+            try:
+                # Handle ISO format dates (e.g., "2023-04-01T15:00:00Z")
+                release_year = datetime.fromisoformat(release_date_str.replace('Z', '+00:00')).year
+            except ValueError:
+                try: # Fallback for simpler date strings like "YYYY-MM-DD"
+                    release_year = datetime.strptime(release_date_str.split('T')[0], '%Y-%m-%d').year
+                except ValueError:
+                    logging.warning(f"Could not parse release date for {'chart' if is_chart else 'playlist'} {playlist_id}: {release_date_str}")
+
+        cover_uri = image_data.get('uri') if image_data else None
+        cover_url = self._generate_artwork_url(cover_uri, self.cover_size) if cover_uri else None
+        cover_type_str = image_data.get('extension', 'jpg').lower() if image_data and image_data.get('extension') else 'jpg'
+        cover_type = ImageFileTypeEnum[cover_type_str] if cover_type_str in ImageFileTypeEnum.__members__ else ImageFileTypeEnum.jpg
+        
+        # Consistency check
+        if num_tracks_from_api != len(processed_tracks_ids):
+            logging.warning(f"Playlist/Chart {name} ({playlist_id}): Number of tracks from API ({num_tracks_from_api}) differs from successfully parsed tracks ({len(processed_tracks_ids)}).")
+
+        # Calculate duration (sum of track durations if available, Beatport charts/playlists don't usually provide this directly)
+        # This would require fetching individual track details, which is too slow here. So, duration remains None.
+        total_duration_seconds = None 
 
         return PlaylistInfo(
-            name=playlist_data.get("name"),
-            creator=creator,
+            id=playlist_id,
+            name=name,
+            creator=creator_name,
+            creator_id=creator_id,
+            description=description,
+            num_tracks=len(processed_tracks_ids),
+            num_tracks_from_api=num_tracks_from_api,
+            duration=total_duration_seconds,
             release_year=release_year,
-            duration=sum([(t.get("length_ms") or 0) // 1000 for t in playlist_tracks]),
-            tracks=[t.get("id") for t in playlist_tracks],
-            cover_url=self._generate_artwork_url(cover_url, self.cover_size),
-            track_extra_kwargs=cache
+            cover_url=cover_url,
+            cover_type=cover_type,
+            tracks=processed_tracks_ids,
+            explicit=is_explicit, 
+            track_extra_kwargs={'is_chart': is_chart} # Pass is_chart down for track processing
         )
 
     def get_artist_info(self, artist_id: str, get_credited_albums: bool, is_chart: bool = False) -> ArtistInfo:
