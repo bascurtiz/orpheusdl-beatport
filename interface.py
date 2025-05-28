@@ -244,7 +244,6 @@ class ModuleInterface:
                 additional=additional if additional else None,
                 duration=duration,
                 explicit=is_explicit,
-                image_url=image_url,
                 extra_kwargs=item_extra_kwargs if item_extra_kwargs else {}
             ))
         return items
@@ -343,22 +342,19 @@ class ModuleInterface:
 
         # Calculate duration (sum of track durations if available, Beatport charts/playlists don't usually provide this directly)
         # This would require fetching individual track details, which is too slow here. So, duration remains None.
-        total_duration_seconds = None 
+        total_duration_seconds = None
 
         return PlaylistInfo(
-            id=playlist_id,
             name=name,
             creator=creator_name,
             creator_id=creator_id,
             description=description,
-            num_tracks=len(processed_tracks_ids),
-            num_tracks_from_api=num_tracks_from_api,
             duration=total_duration_seconds,
             release_year=release_year,
             cover_url=cover_url,
             cover_type=cover_type,
             tracks=processed_tracks_ids,
-            explicit=is_explicit, 
+            explicit=is_explicit,
             track_extra_kwargs={'is_chart': is_chart} # Pass is_chart down for track processing
         )
 
