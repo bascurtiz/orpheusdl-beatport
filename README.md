@@ -3,11 +3,18 @@
 OrpheusDL - Beatport
 =================
 
-A Beatport module for the OrpheusDL modular archival music program
+A Beatport module for the OrpheusDL modular archival music program<br>
+This fork fixes:<br>
+- Static amount (10) of search results is now dynamic (based on limit set in settings.json)<br>
+- Fixed issue #25 and #27<br>
+- Fix for TypeError: unsupported operand type(s) for //: 'NoneType' and 'int'<br>
+- Playlist search and download functionality<br>
+- Backwards compatible with (og) OrpheusDL<br>
 
-[Report Bug](https://github.com/Dniel97/orpheusdl-beatport/issues)
+
+[Report Bug](https://github.com/bascurtiz/orpheusdl-beatport/issues)
 ·
-[Request Feature](https://github.com/Dniel97/orpheusdl-beatport/issues)
+[Request Feature](https://github.com/bascurtiz/orpheusdl-beatport/issues)
 
 
 ## Table of content
@@ -37,13 +44,13 @@ Follow these steps to get a local copy of Orpheus up and running:
 
 ### Prerequisites
 
-* Already have [OrpheusDL](https://github.com/yarrm80s/orpheusdl) installed
+* Already have [OrpheusDL](https://github.com/bascurtiz/orpheusdl) installed
 
 ### Installation
 
 1. Go to your `orpheusdl/` directory and run the following command:
    ```sh
-   git clone https://github.com/Dniel97/orpheusdl-beatport.git modules/beatport
+   git clone https://github.com/bascurtiz/orpheusdl-beatport modules/beatport
    ```
 2. Execute:
    ```sh
@@ -116,4 +123,4 @@ Yarrm80s (pronounced 'Yeargh mateys!') - [@yarrm80s](https://github.com/yarrm80s
 
 Dniel97 - [@Dniel97](https://github.com/Dniel97)
 
-Project Link: [OrpheusDL Beatport Public GitHub Repository](https://github.com/Dniel97/orpheusdl-beatport)
+Project Link: [OrpheusDL Beatport Public GitHub Repository](https://github.com/bascurtiz/orpheusdl-beatport)
