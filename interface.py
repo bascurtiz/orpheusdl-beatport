@@ -186,7 +186,9 @@ class ModuleInterface:
             duration = None
             additional = []
             item_extra_kwargs = {}
-            image_uri = i.get('image', {}).get('uri')
+            # Safe handling of image data - handle None values properly
+            image_data = i.get('image') or {}
+            image_uri = image_data.get('uri') if isinstance(image_data, dict) else None
             image_url = self._generate_artwork_url(image_uri, 500) if image_uri else None
             result_id = str(i.get('id'))
             is_explicit = i.get('explicit', False)
@@ -331,9 +333,14 @@ class ModuleInterface:
                 except ValueError:
                     logging.warning(f"Could not parse release date for {'chart' if is_chart else 'playlist'} {playlist_id}: {release_date_str}")
 
-        cover_uri = image_data.get('uri') if image_data else None
+        # Safe handling of image data - handle None values properly
+        cover_uri = None
+        if image_data and isinstance(image_data, dict):
+            cover_uri = image_data.get('uri')
         cover_url = self._generate_artwork_url(cover_uri, self.cover_size) if cover_uri else None
-        cover_type_str = image_data.get('extension', 'jpg').lower() if image_data and image_data.get('extension') else 'jpg'
+        cover_type_str = 'jpg'
+        if image_data and isinstance(image_data, dict) and image_data.get('extension'):
+            cover_type_str = image_data.get('extension', 'jpg').lower()
         cover_type = ImageFileTypeEnum[cover_type_str] if cover_type_str in ImageFileTypeEnum.__members__ else ImageFileTypeEnum.jpg
         
         # Consistency check
@@ -408,7 +415,8 @@ class ModuleInterface:
             # sum up all the individual track lengths
             duration=sum([(t.get("length_ms") or 0) // 1000 for t in tracks]),
             upc=album_data.get("upc"),
-            cover_url=self._generate_artwork_url(album_data.get("image").get("dynamic_uri"), self.cover_size),
+            cover_url=self._generate_artwork_url(
+                (album_data.get("image") or {}).get("dynamic_uri"), self.cover_size) if album_data.get("image") else None,
             artist=album_data.get("artists")[0].get("name"),
             artist_id=album_data.get("artists")[0].get("id"),
             tracks=[t.get("id") for t in tracks],
@@ -422,7 +430,9 @@ class ModuleInterface:
 
         track_data = data[track_id] if track_id in data else self.session.get_track(track_id)
 
-        album_id = track_data.get("release").get("id")
+        # Safe access to release.id
+        release_data = track_data.get("release") or {}
+        album_id = release_data.get("id")
         album_data = {}
         error = None
 
@@ -437,18 +447,25 @@ class ModuleInterface:
         track_name += f" ({track_data.get('mix_name')})" if track_data.get("mix_name") else ""
 
         release_year = track_data.get("publish_date")[:4] if track_data.get("publish_date") else None
-        genres = [track_data.get("genre").get("name")]
+        # Safe access to genre names
+        genre_data = track_data.get("genre") or {}
+        genres = [genre_data.get("name")] if genre_data.get("name") else []
         # check if a second genre exists
-        genres += [track_data.get("sub_genre").get("name")] if track_data.get("sub_genre") else []
+        sub_genre_data = track_data.get("sub_genre") or {}
+        if sub_genre_data.get("name"):
+            genres.append(sub_genre_data.get("name"))
 
         extra_tags = {}
         if track_data.get("bpm"):
             extra_tags["BPM"] = str(track_data.get("bpm"))
-        if track_data.get("key"):
-            extra_tags["Key"] = track_data.get("key").get("name")
+        key_data = track_data.get("key") or {}
+        if key_data.get("name"):
+            extra_tags["Key"] = key_data.get("name")
         if track_data.get("catalog_number"):
             extra_tags["Catalog number"] = track_data.get("catalog_number")
 
+        # Safe access to nested release data
+        label_data = release_data.get("label") or {}
         tags = Tags(
             album_artist=album_data.get("artists", [{}])[0].get("name"),
             track_number=track_data.get("number"),
@@ -457,8 +474,8 @@ class ModuleInterface:
             isrc=track_data.get("isrc"),
             genres=genres,
             release_date=track_data.get("publish_date"),
-            copyright=f"© {release_year} {track_data.get('release').get('label').get('name')}",
-            label=track_data.get("release").get("label").get("name"),
+            copyright=f"© {release_year} {label_data.get('name')}" if label_data.get('name') else None,
+            label=label_data.get("name"),
             extra_tags=extra_tags
         )
 
@@ -475,6 +492,10 @@ class ModuleInterface:
         }
         length_ms = track_data.get("length_ms")
 
+        # Safe access to release image data
+        release_image_data = release_data.get("image") or {}
+        cover_dynamic_uri = release_image_data.get("dynamic_uri")
+
         track_info = TrackInfo(
             name=track_name,
             album=album_data.get("name"),
@@ -486,8 +507,7 @@ class ModuleInterface:
             bitrate=bitrate[quality],
             bit_depth=16 if quality == "lossless" else None,  # https://en.wikipedia.org/wiki/Audio_bit_depth#cite_ref-1
             sample_rate=44.1,
-            cover_url=self._generate_artwork_url(
-                track_data.get("release").get("image").get("dynamic_uri"), self.cover_size),
+            cover_url=self._generate_artwork_url(cover_dynamic_uri, self.cover_size) if cover_dynamic_uri else None,
             tags=tags,
             codec=CodecEnum.FLAC if quality == "lossless" else CodecEnum.AAC,
             download_extra_kwargs={"track_id": track_id, "quality_tier": quality_tier},
@@ -501,7 +521,10 @@ class ModuleInterface:
             data = {}
 
         track_data = data[track_id] if track_id in data else self.session.get_track(track_id)
-        cover_url = track_data.get("release").get("image").get("dynamic_uri")
+        # Safe access to release image data
+        release_data = track_data.get("release") or {}
+        release_image_data = release_data.get("image") or {}
+        cover_url = release_image_data.get("dynamic_uri")
 
         return CoverInfo(
             url=self._generate_artwork_url(cover_url, cover_options.resolution),
