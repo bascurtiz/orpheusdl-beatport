@@ -536,6 +536,32 @@ class ModuleInterface:
         if not stream_data.get("location"):
             raise self.exception("Could not get stream, exiting")
 
+        # Validate the download URL by checking content headers
+        try:
+            response = self.session.s.head(stream_data.get("location"), timeout=10)
+            content_length = response.headers.get('content-length')
+            content_type = response.headers.get('content-type', '')
+            
+            # Check if the content is suspiciously small (less than 1KB suggests corruption)
+            if content_length and int(content_length) < 1024:
+                raise self.exception(f"Track '{track_id}' appears to be corrupted (only {content_length} bytes available)")
+            
+            # Check if content type is appropriate for audio
+            if content_type and not any(audio_type in content_type.lower() 
+                                       for audio_type in ['audio', 'octet-stream', 'mpeg', 'flac', 'application']):
+                raise self.exception(f"Track '{track_id}' does not contain valid audio content")
+                
+        except Exception as e:
+            # If validation fails with an exception, assume the track is not available
+            if hasattr(e, 'response') and e.response.status_code == 403:
+                raise self.exception(f"Track '{track_id}' is not available for download (access denied)")
+            elif "corrupted" in str(e) or "does not contain valid audio" in str(e):
+                # Re-raise our own validation errors
+                raise e
+            else:
+                # For other errors, log a warning but allow the download to proceed
+                logging.warning(f"Could not validate download URL for track {track_id}: {e}")
+
         return TrackDownloadInfo(
             download_type=DownloadEnum.URL,
             file_url=stream_data.get("location")
