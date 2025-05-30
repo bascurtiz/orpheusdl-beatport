@@ -4,12 +4,7 @@ OrpheusDL - Beatport
 =================
 
 A Beatport module for the OrpheusDL modular archival music program<br>
-This fork fixes:<br>
-- Static amount (10) of search results is now dynamic (based on limit set in settings.json)<br>
-- Fixed issue #25 and #27<br>
-- Fix for TypeError: unsupported operand type(s) for //: 'NoneType' and 'int'<br>
-- Playlist search and download functionality<br>
-- Backwards compatible with (og) OrpheusDL<br>
+**This fork fixes stuff.**
 
 
 [Report Bug](https://github.com/bascurtiz/orpheusdl-beatport/issues)
