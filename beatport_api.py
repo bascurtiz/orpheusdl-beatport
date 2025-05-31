@@ -129,10 +129,25 @@ class BeatportApi:
         if r.status_code == 401:
             raise ValueError(r.text)
 
-        # check if territory is not allowed
+        # check if territory is not allowed or other access issues
         if r.status_code == 403:
-            if "Territory" in r.json().get("detail", ""):
-                raise BeatportError("region locked")
+            try:
+                response_data = r.json()
+                detail = response_data.get("detail", "")
+                
+                # More specific territory checking
+                if "territory" in detail.lower() or "region" in detail.lower():
+                    raise BeatportError("region locked")
+                elif "subscription" in detail.lower():
+                    raise BeatportError("subscription required")
+                elif "not available" in detail.lower():
+                    raise BeatportError("content not available")
+                else:
+                    # Generic 403 error with actual message
+                    raise BeatportError(f"access denied: {detail}")
+            except (ValueError, KeyError):
+                # If we can't parse JSON, just give a generic 403 error
+                raise BeatportError("access denied")
 
         if r.status_code not in {200, 201, 202}:
             raise ConnectionError(r.text)

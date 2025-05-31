@@ -1,5 +1,6 @@
 import logging
 import re
+from typing import Optional
 
 from datetime import datetime
 
@@ -382,7 +383,7 @@ class ModuleInterface:
             track_extra_kwargs={"data": {t.get("id"): t for t in artist_tracks}},
         )
 
-    def get_album_info(self, album_id: str, data=None, is_chart: bool = False) -> AlbumInfo or None:
+    def get_album_info(self, album_id: str, data=None, is_chart: bool = False) -> Optional[AlbumInfo]:
         # check if album is already in album cache, add it
         if data is None:
             data = {}
@@ -428,7 +429,35 @@ class ModuleInterface:
         if data is None:
             data = {}
 
-        track_data = data[track_id] if track_id in data else self.session.get_track(track_id)
+        try:
+            track_data = data[track_id] if track_id in data else self.session.get_track(track_id)
+        except BeatportError as e:
+            # Handle Beatport-specific errors gracefully
+            error_message = str(e)
+            if "region locked" in error_message:
+                error_message = "Track is not available in your region"
+            elif "subscription required" in error_message:
+                error_message = "Track requires a higher subscription level"
+            elif "content not available" in error_message:
+                error_message = "Track is not available for download"
+            
+            # Return a minimal TrackInfo with error instead of crashing
+            return TrackInfo(
+                name="Unknown Track",
+                album_id="",
+                album="Unknown Album", 
+                artists=["Unknown Artist"],
+                artist_id="",
+                bit_depth=16,
+                bitrate=320,
+                sample_rate=44.1,
+                release_year=0,
+                explicit=False,
+                cover_url=None,
+                tags=Tags(),                
+                duration=None,
+                error=error_message
+            )
 
         # Safe access to release.id
         release_data = track_data.get("release") or {}
