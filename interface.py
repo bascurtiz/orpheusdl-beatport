@@ -106,7 +106,7 @@ class ModuleInterface:
             # Essentials = "bp_basic", Professional = "bp_link_pro"
             if account_data.get("subscription") == "bp_link_pro":
                 # Pro subscription, set the quality to high and lossless
-                # self.print("Beatport: Professional subscription detected, allowing high and lossless quality")
+                self.print("Beatport: Professional subscription detected, allowing high and lossless quality")
                 self.quality_parse[QualityEnum.HIGH] = "high"
                 self.quality_parse[QualityEnum.HIFI] = "lossless"
                 self.quality_parse[QualityEnum.LOSSLESS] = "lossless"
@@ -285,7 +285,7 @@ class ModuleInterface:
                 # No more results or error, break loop
                 logging.warning(f"Stopped pagination for {'chart' if is_chart else 'playlist'} {playlist_id} at page {current_page}. Expected {total_items}, got {len(all_tracks_raw)}.")
                 break
-
+        if total_items > 0: self.print("") # Clear the progress line by printing a newline
 
         # For playlists (non-charts), tracks are often nested under a 'track' key.
         # For charts, the track data is usually direct.
@@ -374,6 +374,7 @@ class ModuleInterface:
         artist_tracks = artist_tracks_data.get("results")
         total_tracks = artist_tracks_data.get("count")
         for page in range(2, total_tracks // 100 + 2):
+            print(f"Fetching {page * 100}/{total_tracks}", end="\r")
             artist_tracks += self.session.get_artist_tracks(artist_id, page=page).get("results")
 
         return ArtistInfo(
@@ -390,15 +391,7 @@ class ModuleInterface:
         try:
             album_data = data.get(album_id) if album_id in data else self.session.get_release(album_id)
         except BeatportError as e:
-            error_message = str(e)
-            if "not found" in error_message:
-                self.print(f"Beatport: Album {album_id} not found (may have been removed or ID is invalid)")
-            elif "region locked" in error_message:
-                self.print(f"Beatport: Album {album_id} is not available in your region")
-            elif "subscription required" in error_message:
-                self.print(f"Beatport: Album {album_id} requires a higher subscription level")
-            else:
-                self.print(f"Beatport: Album {album_id} - {error_message}")
+            self.print(f"Beatport: Album {album_id} is {str(e)}")
             return
 
         tracks_data = self.session.get_release_tracks(album_id)
@@ -447,8 +440,6 @@ class ModuleInterface:
                 error_message = "Track requires a higher subscription level"
             elif "content not available" in error_message:
                 error_message = "Track is not available for download"
-            elif "not found" in error_message:
-                error_message = "Track not found (may have been removed or ID is invalid)"
             
             # Return a minimal TrackInfo with error instead of crashing
             return TrackInfo(
@@ -584,11 +575,10 @@ class ModuleInterface:
             if content_length and int(content_length) < 1024:
                 raise self.exception(f"Track '{track_id}' appears to be corrupted (only {content_length} bytes available)")
             
-            # Only check for obviously non-audio content types (like HTML error pages)
-            # Be more permissive with content type validation since audio can be served with various MIME types
-            if content_type and any(bad_type in content_type.lower() 
-                                   for bad_type in ['text/html', 'text/plain', 'application/json', 'text/xml']):
-                raise self.exception(f"Track '{track_id}' has invalid content type: {content_type}")
+            # Check if content type is appropriate for audio
+            if content_type and not any(audio_type in content_type.lower() 
+                                       for audio_type in ['audio', 'octet-stream', 'mpeg', 'flac', 'application']):
+                raise self.exception(f"Track '{track_id}' does not contain valid audio content")
                 
         except Exception as e:
             # If validation fails with an exception, assume the track is not available

@@ -149,16 +149,6 @@ class BeatportApi:
                 # If we can't parse JSON, just give a generic 403 error
                 raise BeatportError("access denied")
 
-        # Handle 404 Not Found gracefully
-        if r.status_code == 404:
-            try:
-                response_data = r.json()
-                detail = response_data.get("detail", "Resource not found")
-                raise BeatportError(f"not found: {detail}")
-            except (ValueError, KeyError):
-                # If we can't parse JSON, give a generic 404 error
-                raise BeatportError("resource not found")
-        
         if r.status_code not in {200, 201, 202}:
             raise ConnectionError(r.text)
 
