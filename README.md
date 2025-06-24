@@ -3,13 +3,11 @@
 OrpheusDL - Beatport
 =================
 
-A Beatport module for the OrpheusDL modular archival music program<br>
-**This fork fixes stuff.**
+A Beatport module for the OrpheusDL modular archival music program
 
-
-[Report Bug](https://github.com/bascurtiz/orpheusdl-beatport/issues)
+[Report Bug](https://github.com/Dniel97/orpheusdl-beatport/issues)
 ·
-[Request Feature](https://github.com/bascurtiz/orpheusdl-beatport/issues)
+[Request Feature](https://github.com/Dniel97/orpheusdl-beatport/issues)
 
 
 ## Table of content
@@ -39,13 +37,13 @@ Follow these steps to get a local copy of Orpheus up and running:
 
 ### Prerequisites
 
-* Already have [OrpheusDL](https://github.com/bascurtiz/orpheusdl) installed
+* Already have [OrpheusDL](https://github.com/yarrm80s/orpheusdl) installed
 
 ### Installation
 
 1. Go to your `orpheusdl/` directory and run the following command:
    ```sh
-   git clone https://github.com/bascurtiz/orpheusdl-beatport modules/beatport
+   git clone https://github.com/Dniel97/orpheusdl-beatport.git modules/beatport
    ```
 2. Execute:
    ```sh
@@ -118,4 +116,4 @@ Yarrm80s (pronounced 'Yeargh mateys!') - [@yarrm80s](https://github.com/yarrm80s
 
 Dniel97 - [@Dniel97](https://github.com/Dniel97)
 
-Project Link: [OrpheusDL Beatport Public GitHub Repository](https://github.com/bascurtiz/orpheusdl-beatport)
+Project Link: [OrpheusDL Beatport Public GitHub Repository](https://github.com/Dniel97/orpheusdl-beatport)
