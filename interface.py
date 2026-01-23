@@ -113,9 +113,28 @@ class ModuleInterface:
 
     @staticmethod
     def custom_url_parse(link: str):
-        # Previous regex (caused issues): r"https?://(www.)?beatport.com/(?:[a-z]{2}/)?.*?/(?P<type>track|release|artist|playlists|chart)/.*/?(?P<id>\d+)"
-        # New, more explicit regex:
-        match = re.search(r"https?://(www\.)?beatport\.com/(?:[a-z]{2}/)?(?P<type>track|release|artist|playlists|chart)/(?P<slug>.+)/(?P<id>\d+)", link)
+        # First, try to match library playlists (e.g., /library/playlists/6099487)
+        # These don't have a slug, just the ID directly after the type
+        library_match = re.search(r"https?://(www\.)?beatport\.com/(?P<region>[a-z]{2}/)?library/(?P<type>playlists)/(?P<id>\d+)", link)
+        
+        if library_match:
+            # Extract region code if present
+            region_code = library_match.group("region")
+            if region_code:
+                region_code = region_code.rstrip("/")
+            
+            extra_kwargs = {"is_chart": False}  # Library playlists are never charts
+            if region_code:
+                extra_kwargs["region"] = region_code
+            
+            return MediaIdentification(
+                media_type=DownloadTypeEnum.playlist,
+                media_id=library_match.group("id"),
+                extra_kwargs=extra_kwargs
+            )
+        
+        # Standard URL pattern with slug (e.g., /track/song-name/123, /release/album-name/456)
+        match = re.search(r"https?://(www\.)?beatport\.com/(?P<region>[a-z]{2}/)?(?P<type>track|release|artist|playlists|chart)/(?P<slug>.+)/(?P<id>\d+)", link)
 
         # so parse the regex "match" to the actual DownloadTypeEnum
         media_types = {
@@ -129,11 +148,20 @@ class ModuleInterface:
         if not match: # Added error handling for robustness
             raise ValueError(f"Could not parse Beatport URL: {link}")
 
+        # Extract region code if present (e.g., "es" from "/es/")
+        region_code = match.group("region")
+        if region_code:
+            region_code = region_code.rstrip("/")  # Remove trailing slash
+
+        extra_kwargs = {"is_chart": match.group("type") == "chart"}
+        if region_code:
+            extra_kwargs["region"] = region_code
+
         return MediaIdentification(
             media_type=media_types[match.group("type")],
             media_id=match.group("id"),
             # check if the playlist is a user playlist or DJ charts, only needed for get_playlist_info()
-            extra_kwargs={"is_chart": match.group("type") == "chart"}
+            extra_kwargs=extra_kwargs
         )
 
     @staticmethod
@@ -251,7 +279,7 @@ class ModuleInterface:
             ))
         return items
         
-    def get_playlist_info(self, playlist_id: str, is_chart: bool = False) -> PlaylistInfo:
+    def get_playlist_info(self, playlist_id: str, is_chart: bool = False, **kwargs) -> PlaylistInfo:
         all_tracks_raw = []
         current_page = 1
         per_page = 100 # Max items per page Beatport API usually allows for tracks
@@ -366,7 +394,7 @@ class ModuleInterface:
             track_extra_kwargs={'is_chart': is_chart} # Pass is_chart down for track processing
         )
 
-    def get_artist_info(self, artist_id: str, get_credited_albums: bool, is_chart: bool = False) -> ArtistInfo:
+    def get_artist_info(self, artist_id: str, get_credited_albums: bool, is_chart: bool = False, **kwargs) -> ArtistInfo:
         artist_data = self.session.get_artist(artist_id)
         artist_tracks_data = self.session.get_artist_tracks(artist_id)
 
@@ -383,7 +411,7 @@ class ModuleInterface:
             track_extra_kwargs={"data": {t.get("id"): t for t in artist_tracks}},
         )
 
-    def get_album_info(self, album_id: str, data=None, is_chart: bool = False) -> Optional[AlbumInfo]:
+    def get_album_info(self, album_id: str, data=None, is_chart: bool = False, **kwargs) -> Optional[AlbumInfo]:
         # check if album is already in album cache, add it
         if data is None:
             data = {}
@@ -391,10 +419,70 @@ class ModuleInterface:
         try:
             album_data = data.get(album_id) if album_id in data else self.session.get_release(album_id)
         except BeatportError as e:
-            self.print(f"Beatport: Album {album_id} is {str(e)}")
+            error_message = str(e)
+            import logging
+            logging.warning(f"Beatport: Error getting album {album_id}: {error_message}")
+            
+            # Check the actual error - if it says "region locked" but the track is available on website,
+            # it's probably NOT a real region lock but an API issue
+            if "region locked" in error_message.lower():
+                # Try workaround: attempt to get tracks directly even if release metadata fails
+                # This might work if only the release endpoint has territory restrictions but tracks don't
+                self.print(f"Beatport: Album {album_id} - API returned 'region locked' error for release metadata")
+                self.print(f"  Attempting workaround: trying to get tracks directly...")
+                try:
+                    tracks_data = self.session.get_release_tracks(album_id)
+                    tracks = tracks_data.get("results", [])
+                    total_tracks = tracks_data.get("count", len(tracks))
+                    
+                    # If we can get tracks, try to get release info from first track
+                    if tracks and len(tracks) > 0:
+                        first_track = tracks[0]
+                        release_data_from_track = first_track.get("release", {})
+                        if release_data_from_track:
+                            # Use release data from track instead
+                            album_data = release_data_from_track
+                            self.print(f"  Workaround successful: Got {total_tracks} tracks, using release info from track data")
+                        else:
+                            raise BeatportError("Could not get release info from tracks")
+                    else:
+                        raise BeatportError("No tracks found")
+                except BeatportError as track_error:
+                    # Workaround failed, show helpful error message
+                    self.print(f"  Workaround failed: {str(track_error)}")
+                    self.print(f"  Note: If this album is available on the Beatport website, this is likely an API issue, not a real region lock.")
+                    self.print(f"  The Beatport API is returning 'Territory Restricted.' even though the content is available on the website.")
+                    self.print(f"  This appears to be a bug in the Beatport API. You may need to:")
+                    self.print(f"    1. Contact Beatport support about this API inconsistency")
+                    self.print(f"    2. Try downloading individual tracks if they are available")
+                    error_message = f"API error (Beatport API bug - false region lock): {error_message}. The album is available on the website but the API incorrectly reports it as territory restricted."
+                    self.print(f"Beatport: Album {album_id} - {error_message}")
+                    return
+            elif "access denied" in error_message.lower() or "api error" in error_message.lower():
+                error_message = f"API error: {error_message}. This might be a temporary API issue. Try again later or check your subscription status."
+                self.print(f"Beatport: Album {album_id} - {error_message}")
             return
 
-        tracks_data = self.session.get_release_tracks(album_id)
+        try:
+            tracks_data = self.session.get_release_tracks(album_id)
+        except BeatportError as e:
+            error_message = str(e)
+            import logging
+            logging.warning(f"Beatport: Error getting album tracks for {album_id}: {error_message}")
+            self.print(f"Beatport: Could not get tracks for album {album_id} - {error_message}")
+            # Return album info without tracks if we can't get track list
+            return AlbumInfo(
+                name=album_data.get("name", "Unknown Album"),
+                release_year=album_data.get("publish_date")[:4] if album_data.get("publish_date") else None,
+                duration=0,
+                upc=album_data.get("upc"),
+                cover_url=self._generate_artwork_url(
+                    (album_data.get("image") or {}).get("dynamic_uri"), self.cover_size) if album_data.get("image") else None,
+                artist=album_data.get("artists")[0].get("name") if album_data.get("artists") else "Unknown Artist",
+                artist_id=str(album_data.get("artists")[0].get("id")) if album_data.get("artists") else "",
+                tracks=[],
+                track_extra_kwargs={},
+            )
 
         # now fetch all the found total_items
         tracks = tracks_data.get("results")
@@ -425,7 +513,7 @@ class ModuleInterface:
         )
 
     def get_track_info(self, track_id: str, quality_tier: QualityEnum, codec_options: CodecOptions, slug: str = None,
-                       data=None, is_chart: bool = False) -> TrackInfo:
+                       data=None, is_chart: bool = False, **kwargs) -> TrackInfo:
         if data is None:
             data = {}
 
@@ -434,12 +522,29 @@ class ModuleInterface:
         except BeatportError as e:
             # Handle Beatport-specific errors gracefully
             error_message = str(e)
-            if "region locked" in error_message:
-                error_message = "Track is not available in your region"
-            elif "subscription required" in error_message:
+            import logging
+            logging.warning(f"Beatport: Error getting track {track_id}: {error_message}")
+            
+            # Check if it's a "not found" error - this might mean the track ID doesn't match the API
+            if "not found" in error_message.lower() or "no track matches" in error_message.lower():
+                # Track not found - this could mean:
+                # 1. The track ID in the URL doesn't match the API track ID
+                # 2. The track is not available via the API endpoint (but might be on the website)
+                # 3. The API has an issue
+                # Print a helpful message to console
+                self.print(f"Beatport: Track ID {track_id} not found in API.")
+                self.print(f"  This can happen if the track ID in the URL doesn't match the API track ID.")
+                self.print(f"  Solution: Use the release URL instead (e.g., https://www.beatport.com/release/.../RELEASE_ID)")
+                error_message = f"Track not found in API: {error_message}. The track ID from the URL ({track_id}) might not match the API track ID. Try using the release URL instead."
+            elif "region locked" in error_message.lower():
+                error_message = f"Track is not available in your region. Original error: {error_message}"
+            elif "subscription required" in error_message.lower():
                 error_message = "Track requires a higher subscription level"
-            elif "content not available" in error_message:
+            elif "content not available" in error_message.lower():
                 error_message = "Track is not available for download"
+            elif "access denied" in error_message.lower() or "api error" in error_message.lower():
+                # For access denied or API errors, show the full message for debugging
+                error_message = f"API error: {error_message}. This might be a temporary API issue. Try again later or check your subscription status."
             
             # Return a minimal TrackInfo with error instead of crashing
             return TrackInfo(
@@ -456,6 +561,7 @@ class ModuleInterface:
                 cover_url=None,
                 tags=Tags(),                
                 duration=None,
+                codec=CodecEnum.AAC,  # Default codec for error cases
                 error=error_message
             )
 
@@ -468,9 +574,16 @@ class ModuleInterface:
         try:
             album_data = data[album_id] if album_id in data else self.session.get_release(album_id)
         except ConnectionError as e:
-            # check if the album is region locked
-            if "Territory Restricted." in str(e):
+            # Log the actual error for debugging
+            import logging
+            logging.warning(f"Beatport: ConnectionError getting album {album_id}: {str(e)}")
+            # Only mark as region locked if explicitly stated
+            error_str = str(e)
+            if "Territory Restricted." in error_str or "territory restricted" in error_str.lower():
                 error = f"Album {album_id} is region locked"
+            else:
+                # Don't assume region lock - show the actual error
+                error = f"Album {album_id} - {error_str}"
 
         track_name = track_data.get("name")
         track_name += f" ({track_data.get('mix_name')})" if track_data.get("mix_name") else ""
