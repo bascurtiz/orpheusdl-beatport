@@ -690,7 +690,7 @@ class ModuleInterface:
             
             # Check if content type is appropriate for audio
             if content_type and not any(audio_type in content_type.lower() 
-                                       for audio_type in ['audio', 'octet-stream', 'mpeg', 'flac', 'application']):
+                                       for audio_type in ['audio', 'octet-stream', 'mpeg', 'flac', 'application', 'video', 'mp4']):
                 raise self.exception(f"Track '{track_id}' does not contain valid audio content")
                 
         except Exception as e:
