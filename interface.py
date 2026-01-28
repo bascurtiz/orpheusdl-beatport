@@ -215,10 +215,37 @@ class ModuleInterface:
             duration = None
             additional = []
             item_extra_kwargs = {}
+            
             # Safe handling of image data - handle None values properly
-            image_data = i.get('image') or {}
-            image_uri = image_data.get('uri') if isinstance(image_data, dict) else None
-            image_url = self._generate_artwork_url(image_uri, 500) if image_uri else None
+            # Use smaller size (56px) for search result thumbnails
+            # For tracks: use release.image (album cover), not image (which is waveform)
+            # For other types: use image directly
+            if query_type is DownloadTypeEnum.track:
+                release_data = i.get('release') or {}
+                image_data = release_data.get('image') or {}
+            else:
+                image_data = i.get('image') or {}
+            image_uri = image_data.get('uri') or image_data.get('dynamic_uri') if isinstance(image_data, dict) else None
+            
+            # Beatport's default placeholder for artists - we want to replace this with a better one
+            beatport_default_placeholder = "0dc61986-bccf-49d4-8fad-6b147ea8f327"
+            beatport_preferred_placeholder = "https://geo-media.beatport.com/image_size/500x500/ab2d1d04-233d-4b08-8234-9782b34dcab8.jpg"
+            
+            # Check if the image is the default placeholder
+            if image_uri and beatport_default_placeholder in image_uri:
+                image_url = beatport_preferred_placeholder
+            elif image_uri:
+                image_url = self._generate_artwork_url(image_uri, 56)
+            else:
+                image_url = None
+            
+            # Fallback to preferred Beatport cover if no image available (for artists)
+            if not image_url and query_type is DownloadTypeEnum.artist:
+                image_url = beatport_preferred_placeholder
+            
+            # Extract preview/sample URL (Beatport provides 2-minute previews)
+            preview_url = i.get('sample_url') or i.get('preview_url') or i.get('sample', {}).get('url')
+            
             result_id = str(i.get('id'))
             is_explicit = i.get('explicit', False)
 
@@ -275,6 +302,8 @@ class ModuleInterface:
                 additional=additional if additional else None,
                 duration=duration,
                 explicit=is_explicit,
+                image_url=image_url,
+                preview_url=preview_url,
                 extra_kwargs=item_extra_kwargs if item_extra_kwargs else {}
             ))
         return items
