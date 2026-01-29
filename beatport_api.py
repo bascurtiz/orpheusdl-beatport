@@ -56,6 +56,18 @@ class BeatportApi:
         }, headers={**acc_headers, "Referer": referer})
 
         if r.status_code != 200:
+            # Check for blank field errors and provide a better message
+            try:
+                error_data = r.json()
+                if isinstance(error_data, dict):
+                    if "username" in error_data and "password" in error_data:
+                        username_errors = error_data.get("username", [])
+                        password_errors = error_data.get("password", [])
+                        if any("blank" in str(msg).lower() for msg in username_errors) and \
+                           any("blank" in str(msg).lower() for msg in password_errors):
+                            raise BeatportError("Beatport credentials are required. Please fill in your username and password in the settings.")
+            except (ValueError, KeyError):
+                pass  # If JSON parsing fails, fall through to original error
             raise ConnectionError(r.text)
 
         # get the code from the redirect url, that's why redirect is disabled
@@ -134,20 +146,121 @@ class BeatportApi:
             try:
                 response_data = r.json()
                 detail = response_data.get("detail", "")
+                error_code = response_data.get("error_code", "")
+                error_message = response_data.get("error", "")
+                message = response_data.get("message", "")
                 
-                # More specific territory checking
-                if "territory" in detail.lower() or "region" in detail.lower():
+                # Log the full response for debugging - use warning level so it's visible
+                # Also print to console so user can see it
+                import logging
+                import sys
+                print(f"\n[DEBUG] Beatport API 403 error - endpoint: {endpoint}", file=sys.stderr)
+                print(f"[DEBUG]   detail: {detail}", file=sys.stderr)
+                print(f"[DEBUG]   error_code: {error_code}", file=sys.stderr)
+                print(f"[DEBUG]   error: {error_message}", file=sys.stderr)
+                print(f"[DEBUG]   message: {message}", file=sys.stderr)
+                print(f"[DEBUG]   full_response: {response_data}", file=sys.stderr)
+                logging.warning(f"Beatport API 403 error - endpoint: {endpoint}")
+                logging.warning(f"  detail: {detail}")
+                logging.warning(f"  error_code: {error_code}")
+                logging.warning(f"  error: {error_message}")
+                logging.warning(f"  message: {message}")
+                logging.warning(f"  full_response: {response_data}")
+                
+                # Collect all error text fields
+                all_error_text = " ".join(filter(None, [detail, error_message, message]))
+                all_error_text_lower = all_error_text.lower()
+                
+                # EXTREMELY conservative territory checking - only raise region locked if VERY EXPLICITLY about territory/region restrictions
+                # The API might return 403 for many reasons (subscription, account issues, etc.) - don't assume region lock
+                # Since tracks can be available on the website but API returns 403, we should be VERY careful
+                explicit_region_phrases = [
+                    "not available in your territory",
+                    "not available in your region", 
+                    "not available in this territory",
+                    "not available in this region",
+                    "territory not allowed",
+                    "region not allowed",
+                    "geographic restrictions apply",
+                    "territorial restrictions apply",
+                    "this content is not available in your territory",
+                    "this content is not available in your region"
+                ]
+                
+                # Check if any explicit region phrase appears - must be very explicit and complete
+                # Don't match partial phrases like just "territory" or "region"
+                is_region_locked = False
+                if all_error_text_lower:
+                    import re
+                    for phrase in explicit_region_phrases:
+                        # Check if phrase appears as a complete phrase with word boundaries
+                        pattern = r'\b' + re.escape(phrase) + r'\b'
+                        if re.search(pattern, all_error_text_lower):
+                            is_region_locked = True
+                            logging.warning(f"  Detected explicit region lock phrase: {phrase}")
+                            break
+                    
+                    # Also check for "territory restricted" or "region restricted" but only if they appear as complete phrases
+                    if not is_region_locked:
+                        if re.search(r'\bterritory\s+restricted\b', all_error_text_lower) or \
+                           re.search(r'\bregion\s+restricted\b', all_error_text_lower):
+                            is_region_locked = True
+                            logging.warning(f"  Detected explicit region lock: territory/region restricted")
+                
+                if is_region_locked:
+                    # Log which phrase was detected
+                    import sys
+                    print(f"[DEBUG] Raising 'region locked' based on detected phrase", file=sys.stderr)
                     raise BeatportError("region locked")
-                elif "subscription" in detail.lower():
+                elif "subscription" in all_error_text_lower:
                     raise BeatportError("subscription required")
-                elif "not available" in detail.lower():
+                elif "not available" in all_error_text_lower and ("download" in all_error_text_lower or "stream" in all_error_text_lower):
                     raise BeatportError("content not available")
                 else:
-                    # Generic 403 error with actual message
-                    raise BeatportError(f"access denied: {detail}")
+                    # Log that we're NOT treating this as region locked
+                    import sys
+                    print(f"[DEBUG] NOT treating as region locked - no explicit region phrases found", file=sys.stderr)
+                    print(f"[DEBUG] All error text: {all_error_text}", file=sys.stderr)
+                    # For other 403 errors, show the actual error message from API
+                    # This is likely NOT a region lock - could be subscription, account issue, or API problem
+                    error_msg = detail if detail else (error_message if error_message else (message if message else "access denied (HTTP 403)"))
+                    # Don't label it as region locked - show the actual API error
+                    raise BeatportError(f"API error: {error_msg}")
+            except BeatportError:
+                # Re-raise BeatportError as-is
+                raise
+            except (ValueError, KeyError) as e:
+                # If we can't parse JSON, log the raw response and give a generic 403 error
+                import logging
+                logging.warning(f"Beatport API 403 error - could not parse JSON response: {r.text[:500]}")
+                raise BeatportError(f"API error (HTTP 403): {r.text[:200] if r.text else 'Unable to parse error response'}")
+        
+        # Check for 404 errors (not found)
+        if r.status_code == 404:
+            try:
+                response_data = r.json()
+                detail = response_data.get("detail", "")
+                error_message = response_data.get("error", "")
+                message = response_data.get("message", "")
+                
+                # Log the full response for debugging
+                import logging
+                logging.warning(f"Beatport API 404 error - endpoint: {endpoint}")
+                logging.warning(f"  detail: {detail}")
+                logging.warning(f"  error: {error_message}")
+                logging.warning(f"  message: {message}")
+                logging.warning(f"  full_response: {response_data}")
+                
+                # Return a clear "not found" error
+                error_msg = detail if detail else (error_message if error_message else (message if message else "not found"))
+                raise BeatportError(f"not found: {error_msg}")
+            except BeatportError:
+                raise
             except (ValueError, KeyError):
-                # If we can't parse JSON, just give a generic 403 error
-                raise BeatportError("access denied")
+                # If we can't parse JSON, just give a generic 404 error
+                import logging
+                logging.warning(f"Beatport API 404 error - could not parse JSON response: {r.text[:500]}")
+                raise BeatportError(f"not found (HTTP 404)")
 
         if r.status_code not in {200, 201, 202}:
             raise ConnectionError(r.text)
