@@ -58,7 +58,20 @@ class ModuleInterface:
             # access token expired, get new refresh token
             self.refresh_login()
 
-        self.valid_account()
+        try:
+            self.valid_account()
+        except Exception as e:
+            # Subscription check failed (expired account, no Link, etc.).
+            # Clear stored session and re-login with credentials - user may have new account.
+            err_msg = str(e).lower()
+            if "subscription" in err_msg or "link" in err_msg:
+                self.module_controller.temporary_settings_controller.set("access_token", None)
+                self.module_controller.temporary_settings_controller.set("refresh_token", None)
+                self.module_controller.temporary_settings_controller.set("expires", None)
+                self.login(self.module_controller.module_settings["username"],
+                          self.module_controller.module_settings["password"])
+            else:
+                raise
 
     def _save_session(self) -> dict:
         # save the new access_token, refresh_token and expires in the temporary settings
@@ -77,8 +90,13 @@ class ModuleInterface:
 
         # get a new access_token and refresh_token from the API
         refresh_data = self.session.refresh()
-        if refresh_data and refresh_data.get("error") == "invalid_grant":
-            # if the refresh token is invalid, trigger login
+        if refresh_data:
+            # Refresh failed (invalid_grant, expired, revoked, account changed, etc.).
+            # Clear stored session and re-login with credentials from settings.
+            # Handles: expired subscriptions, new accounts, password changes.
+            self.module_controller.temporary_settings_controller.set("access_token", None)
+            self.module_controller.temporary_settings_controller.set("refresh_token", None)
+            self.module_controller.temporary_settings_controller.set("expires", None)
             self.login(self.module_controller.module_settings["username"],
                        self.module_controller.module_settings["password"])
             return
@@ -589,6 +607,10 @@ class ModuleInterface:
                     return
             elif "access denied" in error_message.lower() or "api error" in error_message.lower():
                 error_message = f"API error: {error_message}. This might be a temporary API issue. Try again later or check your subscription status."
+                self.print(f"Beatport: Album {album_id} - {error_message}")
+            elif "not found" in error_message.lower():
+                self.print(f"Beatport: Release {album_id} - This release does not exist (404). The URL may be invalid or the content may have been removed.")
+            else:
                 self.print(f"Beatport: Album {album_id} - {error_message}")
             return
 
