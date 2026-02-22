@@ -141,8 +141,9 @@ class ModuleInterface:
             if not account_data.get("subscription"):
                 raise self.exception("Beatport: Account does not have an active 'Link' subscription")
 
-            # Essentials = "bp_basic", Professional = "bp_link_pro"
-            if account_data.get("subscription") == "bp_link_pro":
+            # Essentials = "bp_basic", Professional = "bp_link_pro" (Monthly/Yearly/Annual)
+            sub = account_data.get("subscription", "").lower()
+            if sub == "bp_link_pro" or "pro" in sub:
                 # Pro subscription, set the quality to high and lossless
                 self.print("Beatport: Professional subscription detected, allowing high and lossless quality")
                 self.quality_parse[QualityEnum.HIGH] = "high"
@@ -646,7 +647,8 @@ class ModuleInterface:
         # now fetch all the found total_items
         tracks = tracks_data.get("results")
         total_tracks = tracks_data.get("count")
-        for page in range(2, total_tracks // 100 + 2):
+        num_pages = max(1, (total_tracks + 99) // 100)
+        for page in range(2, num_pages + 1):
             print(f"Fetching {len(tracks)}/{total_tracks}", end="\r")
             tracks += self.session.get_release_tracks(album_id, page=page).get("results")
 
