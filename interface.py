@@ -50,10 +50,22 @@ class ModuleInterface:
 
         self.session.set_session(session)
 
+        username = module_controller.module_settings.get("username")
+        password = module_controller.module_settings.get("password")
+
+        has_credentials = bool(username) and bool(password)
+
+        if not has_credentials:
+            self.print("Beatport: No credentials provided, running in anonymous mode")
+            # Always fetch a fresh anonymous token for search since they are short-lived
+            # or immediately invalidate after a certain duration despite their JWT exp
+            self.session.get_anonymous_token()
+            self._save_session()
+            return
+
         if session["refresh_token"] is None:
             # old beatport version with cookies and no refresh token, trigger login manually
-            session = self.login(module_controller.module_settings["username"],
-                                 module_controller.module_settings["password"])
+            session = self.login(username, password)
 
         if session["refresh_token"] is not None and datetime.now() > session["expires"]:
             # access token expired, get new refresh token
@@ -69,8 +81,7 @@ class ModuleInterface:
                 self.module_controller.temporary_settings_controller.set("access_token", None)
                 self.module_controller.temporary_settings_controller.set("refresh_token", None)
                 self.module_controller.temporary_settings_controller.set("expires", None)
-                self.login(self.module_controller.module_settings["username"],
-                          self.module_controller.module_settings["password"])
+                self.login(username, password)
             else:
                 raise
 
@@ -234,6 +245,10 @@ class ModuleInterface:
         }
 
         search_type = search_types.get(query_type)
+
+        # Anonymous tokens 401 on categorized searches with 'type'
+        if not self.session.refresh_token:
+            search_type = None
 
         # perform search with type if supported, otherwise fall back to general search
         if search_type:
@@ -849,6 +864,9 @@ class ModuleInterface:
             file_type=ImageFileTypeEnum.jpg)
 
     def get_track_download(self, track_id: str, quality_tier: QualityEnum) -> TrackDownloadInfo:
+        if not self.module_controller.module_settings.get("username") or not self.module_controller.module_settings.get("password"):
+            raise self.exception("Downloading tracks requires a logged-in Beatport account. Please add your credentials in the settings.")
+
         stream_data = self.session.get_track_download(track_id, self.quality_parse[quality_tier])
 
         if not stream_data.get("location"):

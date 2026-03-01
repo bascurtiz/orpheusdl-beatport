@@ -24,10 +24,49 @@ class BeatportApi:
         # required for the cookies
         self.s = create_requests_session()
 
+    def get_anonymous_token(self):
+        import re
+        import json
+        r = self.s.get("https://www.beatport.com/", headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36"
+        })
+        if r.status_code != 200:
+            raise ConnectionError(f"Failed to get Beatport homepage ({r.status_code})")
+
+        match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', r.text, flags=re.DOTALL)
+        if not match:
+            raise BeatportError("Could not find __NEXT_DATA__ on Beatport homepage")
+
+        data = json.loads(match.group(1))
+
+        def find_token(obj):
+            if isinstance(obj, dict):
+                if 'access_token' in obj:
+                    return obj
+                for k, v in obj.items():
+                    res = find_token(v)
+                    if res: return res
+            elif isinstance(obj, list):
+                for item in obj:
+                    res = find_token(item)
+                    if res: return res
+            return None
+
+        token_data = find_token(data)
+        if not token_data or 'access_token' not in token_data:
+            raise BeatportError("Could not find anonymous access token on Beatport homepage")
+
+        self.access_token = token_data['access_token']
+        self.refresh_token = None
+        expires_in = token_data.get('expires_in', 3600)
+        self.expires = datetime.now() + timedelta(seconds=expires_in)
+
     def headers(self, use_access_token: bool = False):
         return {
-            'user-agent': 'libbeatport/v2.8.2',
+            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36',
             'authorization': f'Bearer {self.access_token}' if use_access_token else None,
+            'referer': 'https://www.beatport.com/',
+            'origin': 'https://www.beatport.com'
         }
 
     def auth(self, username: str, password: str) -> dict:
@@ -141,9 +180,21 @@ class BeatportApi:
 
         r = self.s.get(f'{self.API_URL}{endpoint}', params=params, headers=self.headers(use_access_token=True))
 
-        # access_token expired
+        # access_token expired or invalid
         if r.status_code == 401:
-            raise ValueError(r.text)
+            if not self.refresh_token:
+                # Forced refresh for anonymous sessions
+                self.get_anonymous_token()
+            else:
+                err = self.refresh()
+                if err:
+                    raise ValueError(f"Refresh failed: {r.text}")
+            
+            # retry request
+            r = self.s.get(f'{self.API_URL}{endpoint}', params=params, headers=self.headers(use_access_token=True))
+
+            if r.status_code == 401:
+                raise ValueError(f"Authentication failed after retry: {r.text}")
 
         # check if territory is not allowed or other access issues
         if r.status_code == 403:
@@ -154,16 +205,7 @@ class BeatportApi:
                 error_message = response_data.get("error", "")
                 message = response_data.get("message", "")
                 
-                # Log the full response for debugging - use warning level so it's visible
-                # Also print to console so user can see it
                 import logging
-                import sys
-                print(f"\n[DEBUG] Beatport API 403 error - endpoint: {endpoint}", file=sys.stderr)
-                print(f"[DEBUG]   detail: {detail}", file=sys.stderr)
-                print(f"[DEBUG]   error_code: {error_code}", file=sys.stderr)
-                print(f"[DEBUG]   error: {error_message}", file=sys.stderr)
-                print(f"[DEBUG]   message: {message}", file=sys.stderr)
-                print(f"[DEBUG]   full_response: {response_data}", file=sys.stderr)
                 logging.warning(f"Beatport API 403 error - endpoint: {endpoint}")
                 logging.warning(f"  detail: {detail}")
                 logging.warning(f"  error_code: {error_code}")
