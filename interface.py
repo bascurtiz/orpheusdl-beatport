@@ -55,6 +55,7 @@ class ModuleInterface:
 
         has_credentials = bool(username) and bool(password)
 
+        self.is_anonymous = not has_credentials
         if not has_credentials:
             self.print("Beatport: No credentials provided, running in anonymous mode (search results are limited - login for more)")
             # Always fetch a fresh anonymous token for search since they are short-lived
@@ -903,6 +904,27 @@ class ModuleInterface:
 
     def get_track_info(self, track_id: str, quality_tier: QualityEnum, codec_options: CodecOptions, slug: str = None,
                        data=None, is_chart: bool = False, **kwargs) -> TrackInfo:
+        if self.is_anonymous:
+            error_message = "Beatport credentials are required for downloading. Please fill in your username and password in the settings."
+            # Return a minimal TrackInfo with error instead of proceeding to download
+            return TrackInfo(
+                name="Unknown Track",
+                album_id="",
+                album="Unknown Album", 
+                artists=["Unknown Artist"],
+                artist_id="",
+                bit_depth=16,
+                bitrate=320,
+                sample_rate=44.1,
+                release_year=0,
+                explicit=False,
+                cover_url=None,
+                tags=Tags(),                
+                duration=None,
+                codec=CodecEnum.AAC,  # Default codec for error cases
+                error=error_message
+            )
+
         if data is None:
             data = {}
 
