@@ -497,14 +497,24 @@ class ModuleInterface:
         current_page = 1
         per_page = 100 # Max items per page Beatport API usually allows for tracks
 
-        if is_chart:
-            playlist_data = self.session.get_chart(playlist_id)
-            # Initial fetch for chart tracks
-            tracks_page_data = self.session.get_chart_tracks(playlist_id, page=current_page, per_page=per_page)
-        else:
-            playlist_data = self.session.get_playlist(playlist_id)
-            # Initial fetch for playlist tracks
-            tracks_page_data = self.session.get_playlist_tracks(playlist_id, page=current_page, per_page=per_page)
+        try:
+            if is_chart:
+                playlist_data = self.session.get_chart(playlist_id)
+                # Initial fetch for chart tracks
+                tracks_page_data = self.session.get_chart_tracks(playlist_id, page=current_page, per_page=per_page)
+            else:
+                playlist_data = self.session.get_playlist(playlist_id)
+                # Initial fetch for playlist tracks
+                tracks_page_data = self.session.get_playlist_tracks(playlist_id, page=current_page, per_page=per_page)
+        except Exception as e:
+            logging.error(f"Beatport: Error fetching playlist/chart {playlist_id}: {str(e)}")
+            return PlaylistInfo(
+                name="Unknown Playlist",
+                creator="Unknown Creator",
+                tracks=[],
+                release_year=None,
+                id=playlist_id
+            )
 
         if tracks_page_data and 'results' in tracks_page_data:
             all_tracks_raw.extend(tracks_page_data['results'])
@@ -677,7 +687,8 @@ class ModuleInterface:
                 'release_year': str(r.get("new_release_date", ""))[:4] or None,
                 'cover_url': r.get("image", {}).get("uri"),
                 'additional': [f"1 track" if tc == 1 else f"{tc} tracks"] if tc else None,
-                'duration': duration
+                'duration': duration,
+                'track_count': tc
             })
 
         # Batch fetch missing durations for albums
@@ -781,16 +792,31 @@ class ModuleInterface:
                     except Exception:
                         pass
 
-        album_data = {str(r.get("id")): r for r in releases_list if r.get("id") is not None}
-        track_data = {t.get("id"): t for t in label_tracks if t.get("id") is not None}
+        album_data_map = {str(r.get("id")): r for r in releases_list if r.get("id") is not None}
+        track_data_map = {t.get("id"): t for t in label_tracks if t.get("id") is not None}
+        
+        # Prepare albums as list of dicts for GUI consistency
+        albums_out = []
+        for rid, r in album_data_map.items():
+            tc = r.get("track_count")
+            albums_out.append({
+                'id': rid,
+                'name': r.get("name"),
+                'artist': label_name,
+                'release_year': str(r.get("new_release_date", r.get("publish_date", "")))[:4] or None,
+                'cover_url': (r.get("image") or {}).get("uri"),
+                'additional': [f"1 track" if tc == 1 else f"{tc} tracks"] if tc else None,
+                'duration': r.get("duration"),
+                'track_count': tc
+            })
 
         return ArtistInfo(
             name=label_name,
             artist_id=label_id,
-            albums=release_ids,
-            album_extra_kwargs={"data": album_data},
+            albums=albums_out,
+            album_extra_kwargs={"data": album_data_map},
             tracks=track_ids,
-            track_extra_kwargs={"data": track_data},
+            track_extra_kwargs={"data": track_data_map},
         )
 
     def get_album_info(self, album_id: str, data=None, is_chart: bool = False, **kwargs) -> Optional[AlbumInfo]:
@@ -800,62 +826,29 @@ class ModuleInterface:
 
         try:
             album_data = data.get(album_id) if album_id in data else self.session.get_release(album_id)
-        except BeatportError as e:
+        except Exception as e:
             error_message = str(e)
             import logging
             logging.warning(f"Beatport: Error getting album {album_id}: {error_message}")
-            
-            # Check the actual error - if it says "region locked" but the track is available on website,
-            # it's probably NOT a real region lock but an API issue
-            if "region locked" in error_message.lower():
-                # Try workaround: attempt to get tracks directly even if release metadata fails
-                # This might work if only the release endpoint has territory restrictions but tracks don't
-                self.print(f"Beatport: Album {album_id} - API returned 'region locked' error for release metadata")
-                self.print(f"  Attempting workaround: trying to get tracks directly...")
-                try:
-                    tracks_data = self.session.get_release_tracks(album_id)
-                    tracks = tracks_data.get("results", [])
-                    total_tracks = tracks_data.get("count", len(tracks))
-                    
-                    # If we can get tracks, try to get release info from first track
-                    if tracks and len(tracks) > 0:
-                        first_track = tracks[0]
-                        release_data_from_track = first_track.get("release", {})
-                        if release_data_from_track:
-                            # Use release data from track instead
-                            album_data = release_data_from_track
-                            self.print(f"  Workaround successful: Got {total_tracks} tracks, using release info from track data")
-                        else:
-                            raise BeatportError("Could not get release info from tracks")
-                    else:
-                        raise BeatportError("No tracks found")
-                except BeatportError as track_error:
-                    # Workaround failed, show helpful error message
-                    self.print(f"  Workaround failed: {str(track_error)}")
-                    self.print(f"  Note: If this album is available on the Beatport website, this is likely an API issue, not a real region lock.")
-                    self.print(f"  The Beatport API is returning 'Territory Restricted.' even though the content is available on the website.")
-                    self.print(f"  This appears to be a bug in the Beatport API. You may need to:")
-                    self.print(f"    1. Contact Beatport support about this API inconsistency")
-                    self.print(f"    2. Try downloading individual tracks if they are available")
-                    error_message = f"API error (Beatport API bug - false region lock): {error_message}. The album is available on the website but the API incorrectly reports it as territory restricted."
-                    self.print(f"Beatport: Album {album_id} - {error_message}")
-                    return
-            elif "access denied" in error_message.lower() or "api error" in error_message.lower():
-                error_message = f"API error: {error_message}. This might be a temporary API issue. Try again later or check your subscription status."
-                self.print(f"Beatport: Album {album_id} - {error_message}")
-            elif "not found" in error_message.lower():
-                self.print(f"Beatport: Release {album_id} - This release does not exist (404). The URL may be invalid or the content may have been removed.")
+            if data and album_id in data:
+                album_data = data[album_id]
             else:
-                self.print(f"Beatport: Album {album_id} - {error_message}")
-            return
+                # Return minimal Info if we can't even get metadata
+                return AlbumInfo(
+                    name="Unknown Album",
+                    release_year=None,
+                    tracks=[],
+                    artist="Unknown Artist",
+                    id=album_id
+                )
 
         try:
             tracks_data = self.session.get_release_tracks(album_id)
-        except BeatportError as e:
+        except Exception as e:
             error_message = str(e)
-            import logging
             logging.warning(f"Beatport: Error getting album tracks for {album_id}: {error_message}")
             self.print(f"Beatport: Could not get tracks for album {album_id} - {error_message}")
+            
             # Return album info without tracks if we can't get track list
             return AlbumInfo(
                 name=album_data.get("name", "Unknown Album"),
@@ -904,26 +897,9 @@ class ModuleInterface:
 
     def get_track_info(self, track_id: str, quality_tier: QualityEnum, codec_options: CodecOptions, slug: str = None,
                        data=None, is_chart: bool = False, **kwargs) -> TrackInfo:
+        error = None
         if self.is_anonymous:
-            error_message = "Beatport credentials are required for downloading. Please fill in your username and password in the settings."
-            # Return a minimal TrackInfo with error instead of proceeding to download
-            return TrackInfo(
-                name="Unknown Track",
-                album_id="",
-                album="Unknown Album", 
-                artists=["Unknown Artist"],
-                artist_id="",
-                bit_depth=16,
-                bitrate=320,
-                sample_rate=44.1,
-                release_year=0,
-                explicit=False,
-                cover_url=None,
-                tags=Tags(),                
-                duration=None,
-                codec=CodecEnum.AAC,  # Default codec for error cases
-                error=error_message
-            )
+            error = "Beatport credentials are required for downloading. Please fill in your username and password in settings."
 
         if data is None:
             data = {}
@@ -983,7 +959,9 @@ class ModuleInterface:
         release_data = track_data.get("release") or {}
         album_id = release_data.get("id")
         album_data = {}
-        error = None
+        # Only overwrite error if not already set (e.g. from anonymous check)
+        if error is None:
+            error = None
 
         # When track_data came from cache (e.g. artist tracks), use embedded release to avoid N get_release calls
         if release_data and release_data.get("name") is not None and release_data.get("id") is not None:
