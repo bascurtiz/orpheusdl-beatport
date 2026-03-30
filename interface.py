@@ -803,11 +803,14 @@ class ModuleInterface:
                 'id': rid,
                 'name': r.get("name"),
                 'artist': label_name,
+                'artists': r.get("artists"),
+                'image': r.get("image"),
                 'release_year': str(r.get("new_release_date", r.get("publish_date", "")))[:4] or None,
                 'cover_url': (r.get("image") or {}).get("uri"),
                 'additional': [f"1 track" if tc == 1 else f"{tc} tracks"] if tc else None,
                 'duration': r.get("duration"),
-                'track_count': tc
+                'track_count': tc,
+                'catalog_number': r.get("catalog_number")
             })
 
         return ArtistInfo(
