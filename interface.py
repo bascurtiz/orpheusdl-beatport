@@ -497,17 +497,32 @@ class ModuleInterface:
         current_page = 1
         per_page = 100 # Max items per page Beatport API usually allows for tracks
 
-        try:
-            if is_chart:
-                playlist_data = self.session.get_chart(playlist_id)
-                # Initial fetch for chart tracks
-                tracks_page_data = self.session.get_chart_tracks(playlist_id, page=current_page, per_page=per_page)
-            else:
-                playlist_data = self.session.get_playlist(playlist_id)
-                # Initial fetch for playlist tracks
-                tracks_page_data = self.session.get_playlist_tracks(playlist_id, page=current_page, per_page=per_page)
-        except Exception as e:
-            logging.error(f"Beatport: Error fetching playlist/chart {playlist_id}: {str(e)}")
+        playlist_data = None
+        tracks_page_data = None
+        
+        # Helper to fetch based on type
+        def fetch_data(use_chart: bool):
+            try:
+                if use_chart:
+                    data = self.session.get_chart(playlist_id)
+                    tracks = self.session.get_chart_tracks(playlist_id, page=current_page, per_page=per_page)
+                else:
+                    data = self.session.get_playlist(playlist_id)
+                    tracks = self.session.get_playlist_tracks(playlist_id, page=current_page, per_page=per_page)
+                return data, tracks
+            except Exception:
+                return None, None
+
+        # 1. Try determined type
+        playlist_data, tracks_page_data = fetch_data(is_chart)
+        
+        # 2. Fallback to other type if first failed
+        if not playlist_data:
+            is_chart = not is_chart
+            playlist_data, tracks_page_data = fetch_data(is_chart)
+
+        if not playlist_data:
+            logging.error(f"Beatport: Could not find playlist or chart with ID {playlist_id}")
             return PlaylistInfo(
                 name="Unknown Playlist",
                 creator="Unknown Creator",
@@ -564,14 +579,25 @@ class ModuleInterface:
             num_tracks_from_api = playlist_data.get('track_count', len(processed_tracks_ids)) # Charts often have 'track_count'
             is_explicit = playlist_data.get('explicit', False)
 
-        else: # For actual playlists (if distinct endpoint/structure exists and is used)
-              # This part is more speculative as primary focus is charts based on search.
-              # If Beatport API has distinct user playlists, structure might be like this:
-            creator_name = playlist_data.get('user', {}).get('username', 'Unknown Creator') 
-            creator_id = str(playlist_data.get('user', {}).get('id')) if playlist_data.get('user') else None
-            release_date_str = playlist_data.get('created_at') # Or 'updated_at' for playlists
-            image_data = playlist_data.get('image') # Structure might vary
-            num_tracks_from_api = playlist_data.get('tracks_count', len(processed_tracks_ids)) # Or 'count'
+        else: # For actual playlists
+            # Try various common fields for creator/owner
+            creator_name = playlist_data.get('curator_name') or \
+                           playlist_data.get('user', {}).get('username') or \
+                           playlist_data.get('owner', {}).get('username') or \
+                           playlist_data.get('person', {}).get('owner_name')
+            
+            if not creator_name:
+                 # Last resort fallbacks
+                 creator_name = playlist_data.get('artist', {}).get('name') or "Beatport"
+                 
+            creator_id = str(playlist_data.get('user', {}).get('id') or \
+                             playlist_data.get('owner', {}).get('id') or \
+                             playlist_data.get('person', {}).get('id') or \
+                             playlist_data.get('artist', {}).get('id') or "") or None
+            
+            release_date_str = playlist_data.get('created_at') or playlist_data.get('created_date') # Or 'updated_at' for playlists
+            image_data = playlist_data.get('image')
+            num_tracks_from_api = playlist_data.get('track_count') or playlist_data.get('tracks_count', len(processed_tracks_ids))
             is_explicit = False # Playlists might not have a global explicit flag like albums/tracks.
 
         release_year = None
@@ -890,9 +916,9 @@ class ModuleInterface:
             upc=album_data.get("upc"),
             cover_url=self._generate_artwork_url(
                 (album_data.get("image") or {}).get("dynamic_uri"), self.cover_size) if album_data.get("image") else None,
-            artist=album_data.get("artists")[0].get("name"),
-            artist_id=album_data.get("artists")[0].get("id"),
-            album_artist=album_data.get("artists")[0].get("name"),
+            artist=(album_data.get("artists")[0].get("name") if album_data.get("artists") else "Unknown Artist"),
+            artist_id=(str(album_data.get("artists")[0].get("id")) if album_data.get("artists") else None),
+            album_artist=(album_data.get("artists")[0].get("name") if album_data.get("artists") else "Unknown Artist"),
             label=(album_data.get("label") or {}).get("name"),
             catalog_number=album_data.get("catalog_number"),
             tracks=[t.get("id") for t in tracks],
@@ -1010,8 +1036,13 @@ class ModuleInterface:
 
         # Safe access to nested release data
         label_data = release_data.get("label") or {}
+        # Determine the primary album artist name. Use joined artist names.
+        album_artists = album_data.get("artists") or track_data.get("artists")
+        album_artist_names = [a.get("name") for a in (album_artists or []) if isinstance(a, dict) and a.get("name")]
+        album_artist = album_artist_names[0] if album_artist_names else "Unknown Artist"
+
         tags = Tags(
-            album_artist=album_data.get("artists", [{}])[0].get("name"),
+            album_artist=album_artist,
             track_number=track_data.get("number"),
             total_tracks=album_data.get("track_count"),
             upc=album_data.get("upc"),
@@ -1021,6 +1052,7 @@ class ModuleInterface:
             copyright=f"© {release_year} {label_data.get('name')}" if label_data.get('name') else None,
             label=label_data.get("name"),
             catalog_number=track_data.get("catalog_number"),
+            track_url=f"https://www.beatport.com/track/{slug if slug else 'track'}/{track_id}",
             extra_tags=extra_tags
         )
 
