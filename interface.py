@@ -922,6 +922,7 @@ class ModuleInterface:
             label=(album_data.get("label") or {}).get("name"),
             catalog_number=album_data.get("catalog_number"),
             tracks=[t.get("id") for t in tracks],
+            expected_track_count=int(total_tracks) if total_tracks is not None else None,
             track_extra_kwargs=cache,
         )
 
